@@ -1,473 +1,609 @@
-import React, { useMemo, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Download, FileSpreadsheet, Upload, Database, BarChart3, Filter, Trash2 } from "lucide-react";
-
-function parseDelimitedText(text) {
-  if (!text || !text.trim()) return { headers: [], rows: [] };
-
-  const lines = text
-    .replace(/\r/g, "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (!lines.length) return { headers: [], rows: [] };
-
-  const sample = lines[0];
-  const delimiter = sample.includes("\t") ? "\t" : sample.includes(";") ? ";" : ",";
-
-  const splitLine = (line) => {
-    const result = [];
-    let current = "";
-    let inQuotes = false;
-
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      if (char === '"') {
-        if (inQuotes && line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = !inQuotes;
-        }
-      } else if (char === delimiter && !inQuotes) {
-        result.push(current.trim());
-        current = "";
-      } else {
-        current += char;
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>表格数据分类解析网页</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        background: #f8fafc;
+        color: #0f172a;
       }
-    }
-    result.push(current.trim());
-    return result;
-  };
-
-  const rawHeaders = splitLine(lines[0]);
-  const headers = rawHeaders.map((h, i) => h || `字段${i + 1}`);
-
-  const rows = lines.slice(1).map((line, rowIndex) => {
-    const values = splitLine(line);
-    const row = { __index: rowIndex + 1 };
-    headers.forEach((header, i) => {
-      row[header] = values[i] ?? "";
-    });
-    return row;
-  });
-
-  return { headers, rows };
-}
-
-function inferColumnType(values) {
-  const clean = values.filter((v) => v !== null && v !== undefined && String(v).trim() !== "");
-  if (!clean.length) return "文本";
-
-  const numericCount = clean.filter((v) => !isNaN(Number(String(v).replace(/,/g, "")))).length;
-  const dateCount = clean.filter((v) => !isNaN(Date.parse(v))).length;
-
-  if (numericCount / clean.length > 0.8) return "数值";
-  if (dateCount / clean.length > 0.8) return "日期";
-  return "文本";
-}
-
-function toNumber(value) {
-  const n = Number(String(value ?? "").replace(/,/g, ""));
-  return isNaN(n) ? 0 : n;
-}
-
-function exportFile(filename, content, type = "text/plain;charset=utf-8;") {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-export default function DataAnalysisClassifierPage() {
-  const demoText = `部门,分类,地区,数量,金额\n销售部,A类,华东,12,12000\n销售部,B类,华南,8,6800\n市场部,A类,华东,5,3200\n技术部,C类,华北,10,15000\n销售部,A类,华东,6,7200\n市场部,B类,华南,9,5400\n技术部,C类,华北,7,9800`;
-
-  const [inputText, setInputText] = useState(demoText);
-  const [searchKeyword, setSearchKeyword] = useState("");
-  const [groupField, setGroupField] = useState("");
-  const [subGroupField, setSubGroupField] = useState("none");
-  const [metricField, setMetricField] = useState("");
-  const [aggregateType, setAggregateType] = useState("count");
-
-  const parsed = useMemo(() => parseDelimitedText(inputText), [inputText]);
-
-  const columnTypes = useMemo(() => {
-    const map = {};
-    parsed.headers.forEach((header) => {
-      map[header] = inferColumnType(parsed.rows.map((row) => row[header]));
-    });
-    return map;
-  }, [parsed]);
-
-  const numericColumns = useMemo(
-    () => parsed.headers.filter((h) => columnTypes[h] === "数值"),
-    [parsed.headers, columnTypes]
-  );
-
-  const filteredRows = useMemo(() => {
-    if (!searchKeyword.trim()) return parsed.rows;
-    const key = searchKeyword.toLowerCase();
-    return parsed.rows.filter((row) =>
-      parsed.headers.some((header) => String(row[header] ?? "").toLowerCase().includes(key))
-    );
-  }, [parsed, searchKeyword]);
-
-  const groupedResult = useMemo(() => {
-    if (!groupField) return [];
-
-    const map = new Map();
-
-    filteredRows.forEach((row) => {
-      const groupValue = String(row[groupField] || "未分类");
-      const subValue = subGroupField !== "none" ? String(row[subGroupField] || "未分类") : "全部";
-      const key = `${groupValue}__${subValue}`;
-
-      if (!map.has(key)) {
-        map.set(key, {
-          分类: groupValue,
-          子分类: subValue,
-          条数: 0,
-          数值汇总: 0,
-          明细: [],
-        });
+      .container {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 24px;
       }
-
-      const item = map.get(key);
-      item.条数 += 1;
-      item.数值汇总 += aggregateType === "sum" && metricField ? toNumber(row[metricField]) : 0;
-      item.明细.push(row);
-    });
-
-    return Array.from(map.values())
-      .map((item) => ({
-        ...item,
-        输出值: aggregateType === "count" ? item.条数 : item.数值汇总,
-      }))
-      .sort((a, b) => b.输出值 - a.输出值);
-  }, [filteredRows, groupField, subGroupField, metricField, aggregateType]);
-
-  const summary = useMemo(() => {
-    const totalRows = filteredRows.length;
-    const totalCategories = groupField ? new Set(filteredRows.map((r) => String(r[groupField] || "未分类"))).size : 0;
-    const totalMetric = metricField ? filteredRows.reduce((sum, row) => sum + toNumber(row[metricField]), 0) : 0;
-    return { totalRows, totalCategories, totalMetric };
-  }, [filteredRows, groupField, metricField]);
-
-  const handleFileUpload = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const text = await file.text();
-    setInputText(text);
-  };
-
-  const handleUseDemo = () => setInputText(demoText);
-  const handleClear = () => {
-    setInputText("");
-    setSearchKeyword("");
-    setGroupField("");
-    setSubGroupField("none");
-    setMetricField("");
-    setAggregateType("count");
-  };
-
-  const exportResultCsv = () => {
-    if (!groupedResult.length) return;
-    const headers = ["分类", "子分类", aggregateType === "count" ? "条数" : `汇总(${metricField})`];
-    const lines = [headers.join(",")].concat(
-      groupedResult.map((item) =>
-        [item.分类, item.子分类, item.输出值].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")
-      )
-    );
-    exportFile("分类分析结果.csv", lines.join("\n"), "text/csv;charset=utf-8;");
-  };
-
-  const exportResultJson = () => {
-    exportFile("分类分析结果.json", JSON.stringify(groupedResult, null, 2), "application/json;charset=utf-8;");
-  };
-
-  const previewHeaders = parsed.headers.slice(0, 8);
-
-  return (
-    <div className="min-h-screen bg-slate-50 p-6">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">表格数据分类解析网页</h1>
-            <p className="mt-2 text-sm text-slate-600">
-              支持粘贴 CSV / Excel 复制表格（制表符），自动解析字段，并按分类输出统计结果。
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={handleUseDemo} className="rounded-2xl">
-              <FileSpreadsheet className="mr-2 h-4 w-4" />
-              载入示例
-            </Button>
-            <Button variant="outline" onClick={handleClear} className="rounded-2xl">
-              <Trash2 className="mr-2 h-4 w-4" />
-              清空
-            </Button>
-          </div>
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 24px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 32px;
+        line-height: 1.2;
+      }
+      .subtitle {
+        margin-top: 8px;
+        color: #475569;
+        font-size: 14px;
+      }
+      .actions, .export-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+      }
+      .grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+        margin-top: 20px;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #e2e8f0;
+        border-radius: 18px;
+        box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+      }
+      .card-header {
+        padding: 18px 20px 0;
+      }
+      .card-title {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 700;
+      }
+      .card-body {
+        padding: 20px;
+      }
+      .field {
+        margin-bottom: 16px;
+      }
+      .field label {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      input[type="text"], input[type="file"], select, textarea {
+        width: 100%;
+        padding: 12px 14px;
+        border: 1px solid #cbd5e1;
+        border-radius: 12px;
+        background: #fff;
+        font-size: 14px;
+      }
+      textarea {
+        min-height: 300px;
+        resize: vertical;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+      .button {
+        border: 1px solid #cbd5e1;
+        background: #fff;
+        color: #0f172a;
+        border-radius: 14px;
+        padding: 10px 16px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .button:hover { background: #f1f5f9; }
+      .button.primary {
+        background: #2563eb;
+        border-color: #2563eb;
+        color: #fff;
+      }
+      .button.primary:hover { background: #1d4ed8; }
+      .hint {
+        margin-top: 6px;
+        font-size: 12px;
+        color: #64748b;
+      }
+      .mini-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      .badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .badge {
+        display: inline-block;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: #e2e8f0;
+        color: #0f172a;
+        font-size: 12px;
+      }
+      .stat {
+        padding: 22px;
+      }
+      .stat-label {
+        font-size: 14px;
+        color: #64748b;
+      }
+      .stat-value {
+        margin-top: 8px;
+        font-size: 32px;
+        font-weight: 800;
+      }
+      .result-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .tabs {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+      .tab-btn {
+        border: 1px solid #cbd5e1;
+        background: #f8fafc;
+        border-radius: 999px;
+        padding: 8px 14px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+      .tab-btn.active {
+        background: #0f172a;
+        color: #fff;
+        border-color: #0f172a;
+      }
+      .table-wrap {
+        overflow: auto;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        background: #fff;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 720px;
+      }
+      th, td {
+        text-align: left;
+        padding: 12px 16px;
+        border-bottom: 1px solid #e2e8f0;
+        font-size: 14px;
+      }
+      th {
+        background: #f1f5f9;
+        font-weight: 700;
+      }
+      .empty {
+        padding: 40px 16px;
+        text-align: center;
+        color: #64748b;
+      }
+      .hidden { display: none; }
+      @media (max-width: 900px) {
+        .grid-2, .grid-3, .mini-grid { grid-template-columns: 1fr; }
+        h1 { font-size: 26px; }
+        .container { padding: 16px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <div>
+          <h1>表格数据分类解析网页</h1>
+          <div class="subtitle">支持粘贴 CSV / Excel 复制表格（制表符），自动解析字段，并按分类输出统计结果。</div>
         </div>
-
-        <div className="grid gap-6 lg:grid-cols-2">
-          <Card className="rounded-2xl shadow-sm">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Database className="h-5 w-5" />
-                输入数据
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label>上传 CSV 文件</Label>
-                <div className="flex items-center gap-3">
-                  <Input type="file" accept=".csv,.txt" onChange={handleFileUpload} className="rounded-xl" />
-                </div>
-                <p className="text-xs text-slate-500">也支持直接从 Excel 复制表格后粘贴到下面文本框。</p>
-              </div>
-
-              <div className="space-y-2">
-                <Label>粘贴表格内容</Label>
-                <Textarea
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  placeholder="请粘贴 CSV 或表格数据"
-                  className="min-h-[280px] rounded-2xl font-mono text-sm"
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="rounded-2xl shadow-sm">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Filter className="h-5 w-5" />
-                解析与分类设置
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label>主分类字段</Label>
-                  <Select value={groupField} onValueChange={setGroupField}>
-                    <SelectTrigger className="rounded-xl">
-                      <SelectValue placeholder="选择一个分类字段" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {parsed.headers.map((header) => (
-                        <SelectItem key={header} value={header}>
-                          {header}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>子分类字段</Label>
-                  <Select value={subGroupField} onValueChange={setSubGroupField}>
-                    <SelectTrigger className="rounded-xl">
-                      <SelectValue placeholder="可选" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">不设置</SelectItem>
-                      {parsed.headers.map((header) => (
-                        <SelectItem key={header} value={header}>
-                          {header}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>统计方式</Label>
-                  <Select value={aggregateType} onValueChange={setAggregateType}>
-                    <SelectTrigger className="rounded-xl">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="count">按条数统计</SelectItem>
-                      <SelectItem value="sum">按数值汇总</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>汇总数字字段</Label>
-                  <Select value={metricField} onValueChange={setMetricField}>
-                    <SelectTrigger className="rounded-xl">
-                      <SelectValue placeholder="按条数统计时可不选" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {numericColumns.length ? (
-                        numericColumns.map((header) => (
-                          <SelectItem key={header} value={header}>
-                            {header}
-                          </SelectItem>
-                        ))
-                      ) : (
-                        <SelectItem value="__none" disabled>
-                          无可用数值列
-                        </SelectItem>
-                      )}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label>搜索过滤</Label>
-                <Input
-                  value={searchKeyword}
-                  onChange={(e) => setSearchKeyword(e.target.value)}
-                  placeholder="输入关键词筛选原始数据"
-                  className="rounded-xl"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label>字段识别结果</Label>
-                <div className="flex flex-wrap gap-2">
-                  {parsed.headers.length ? (
-                    parsed.headers.map((header) => (
-                      <Badge key={header} variant="secondary" className="rounded-xl px-3 py-1">
-                        {header} · {columnTypes[header]}
-                      </Badge>
-                    ))
-                  ) : (
-                    <span className="text-sm text-slate-500">暂无数据</span>
-                  )}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+        <div class="actions">
+          <button class="button" id="demoBtn">载入示例</button>
+          <button class="button" id="clearBtn">清空</button>
         </div>
+      </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
-          <Card className="rounded-2xl shadow-sm">
-            <CardContent className="p-6">
-              <div className="text-sm text-slate-500">当前记录数</div>
-              <div className="mt-2 text-3xl font-bold">{summary.totalRows}</div>
-            </CardContent>
-          </Card>
-          <Card className="rounded-2xl shadow-sm">
-            <CardContent className="p-6">
-              <div className="text-sm text-slate-500">分类数量</div>
-              <div className="mt-2 text-3xl font-bold">{summary.totalCategories}</div>
-            </CardContent>
-          </Card>
-          <Card className="rounded-2xl shadow-sm">
-            <CardContent className="p-6">
-              <div className="text-sm text-slate-500">数值汇总</div>
-              <div className="mt-2 text-3xl font-bold">{summary.totalMetric}</div>
-            </CardContent>
-          </Card>
-        </div>
-
-        <Card className="rounded-2xl shadow-sm">
-          <CardHeader className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <BarChart3 className="h-5 w-5" />
-              输出结果
-            </CardTitle>
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={exportResultCsv} className="rounded-2xl">
-                <Download className="mr-2 h-4 w-4" />
-                导出 CSV
-              </Button>
-              <Button variant="outline" onClick={exportResultJson} className="rounded-2xl">
-                <Upload className="mr-2 h-4 w-4" />
-                导出 JSON
-              </Button>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-header"><h2 class="card-title">输入数据</h2></div>
+          <div class="card-body">
+            <div class="field">
+              <label for="fileInput">上传 CSV 文件</label>
+              <input id="fileInput" type="file" accept=".csv,.txt" />
+              <div class="hint">也支持直接从 Excel 复制表格后粘贴到下面文本框。</div>
             </div>
-          </CardHeader>
-          <CardContent>
-            <Tabs defaultValue="result" className="w-full">
-              <TabsList className="mb-4 rounded-2xl">
-                <TabsTrigger value="result">分类结果</TabsTrigger>
-                <TabsTrigger value="raw">原始预览</TabsTrigger>
-              </TabsList>
+            <div class="field">
+              <label for="inputText">粘贴表格内容</label>
+              <textarea id="inputText" placeholder="请粘贴 CSV 或表格数据"></textarea>
+            </div>
+          </div>
+        </div>
 
-              <TabsContent value="result">
-                <div className="overflow-x-auto rounded-2xl border bg-white">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-slate-100 text-left">
-                      <tr>
-                        <th className="px-4 py-3 font-semibold">分类</th>
-                        <th className="px-4 py-3 font-semibold">子分类</th>
-                        <th className="px-4 py-3 font-semibold">输出值</th>
-                        <th className="px-4 py-3 font-semibold">说明</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {groupedResult.length ? (
-                        groupedResult.map((item, index) => (
-                          <tr key={`${item.分类}-${item.子分类}-${index}`} className="border-t">
-                            <td className="px-4 py-3">{item.分类}</td>
-                            <td className="px-4 py-3">{item.子分类}</td>
-                            <td className="px-4 py-3 font-semibold">{item.输出值}</td>
-                            <td className="px-4 py-3 text-slate-500">
-                              {aggregateType === "count"
-                                ? `该分类共有 ${item.条数} 条记录`
-                                : `该分类的 ${metricField} 汇总为 ${item.输出值}`}
-                            </td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-10 text-center text-slate-500">
-                            请选择主分类字段后查看分析结果
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </TabsContent>
+        <div class="card">
+          <div class="card-header"><h2 class="card-title">解析与分类设置</h2></div>
+          <div class="card-body">
+            <div class="mini-grid">
+              <div class="field">
+                <label for="groupField">主分类字段</label>
+                <select id="groupField"></select>
+              </div>
+              <div class="field">
+                <label for="subGroupField">子分类字段</label>
+                <select id="subGroupField"></select>
+              </div>
+              <div class="field">
+                <label for="aggregateType">统计方式</label>
+                <select id="aggregateType">
+                  <option value="count">按条数统计</option>
+                  <option value="sum">按数值汇总</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="metricField">汇总数字字段</label>
+                <select id="metricField"></select>
+              </div>
+            </div>
 
-              <TabsContent value="raw">
-                <div className="overflow-x-auto rounded-2xl border bg-white">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-slate-100 text-left">
-                      <tr>
-                        {previewHeaders.map((header) => (
-                          <th key={header} className="px-4 py-3 font-semibold">
-                            {header}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredRows.slice(0, 20).map((row) => (
-                        <tr key={row.__index} className="border-t">
-                          {previewHeaders.map((header) => (
-                            <td key={header} className="px-4 py-3">
-                              {String(row[header] ?? "")}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <p className="mt-3 text-xs text-slate-500">当前展示前 20 条预览数据。</p>
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
+            <div class="field">
+              <label for="searchKeyword">搜索过滤</label>
+              <input id="searchKeyword" type="text" placeholder="输入关键词筛选原始数据" />
+            </div>
+
+            <div class="field">
+              <label>字段识别结果</label>
+              <div id="columnBadges" class="badges"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-3">
+        <div class="card"><div class="stat"><div class="stat-label">当前记录数</div><div class="stat-value" id="totalRows">0</div></div></div>
+        <div class="card"><div class="stat"><div class="stat-label">分类数量</div><div class="stat-value" id="totalCategories">0</div></div></div>
+        <div class="card"><div class="stat"><div class="stat-label">数值汇总</div><div class="stat-value" id="totalMetric">0</div></div></div>
+      </div>
+
+      <div class="card" style="margin-top:20px;">
+        <div class="card-body">
+          <div class="result-header">
+            <h2 class="card-title" style="margin:0;">输出结果</h2>
+            <div class="export-actions">
+              <button class="button" id="exportCsvBtn">导出 CSV</button>
+              <button class="button primary" id="exportJsonBtn">导出 JSON</button>
+            </div>
+          </div>
+
+          <div class="tabs" style="margin-top:18px;">
+            <button class="tab-btn active" data-tab="result">分类结果</button>
+            <button class="tab-btn" data-tab="raw">原始预览</button>
+          </div>
+
+          <div id="resultTab">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>分类</th>
+                    <th>子分类</th>
+                    <th>输出值</th>
+                    <th>说明</th>
+                  </tr>
+                </thead>
+                <tbody id="resultBody">
+                  <tr><td colspan="4" class="empty">请选择主分类字段后查看分析结果</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="rawTab" class="hidden">
+            <div class="table-wrap">
+              <table>
+                <thead><tr id="rawHead"></tr></thead>
+                <tbody id="rawBody"></tbody>
+              </table>
+            </div>
+            <div class="hint" style="margin-top:10px;">当前展示前 20 条预览数据。</div>
+          </div>
+        </div>
       </div>
     </div>
-  );
-}
+
+    <script>
+      const demoText = `部门,分类,地区,数量,金额\n销售部,A类,华东,12,12000\n销售部,B类,华南,8,6800\n市场部,A类,华东,5,3200\n技术部,C类,华北,10,15000\n销售部,A类,华东,6,7200\n市场部,B类,华南,9,5400\n技术部,C类,华北,7,9800`;
+
+      const els = {
+        inputText: document.getElementById('inputText'),
+        fileInput: document.getElementById('fileInput'),
+        groupField: document.getElementById('groupField'),
+        subGroupField: document.getElementById('subGroupField'),
+        aggregateType: document.getElementById('aggregateType'),
+        metricField: document.getElementById('metricField'),
+        searchKeyword: document.getElementById('searchKeyword'),
+        columnBadges: document.getElementById('columnBadges'),
+        totalRows: document.getElementById('totalRows'),
+        totalCategories: document.getElementById('totalCategories'),
+        totalMetric: document.getElementById('totalMetric'),
+        resultBody: document.getElementById('resultBody'),
+        rawHead: document.getElementById('rawHead'),
+        rawBody: document.getElementById('rawBody'),
+        demoBtn: document.getElementById('demoBtn'),
+        clearBtn: document.getElementById('clearBtn'),
+        exportCsvBtn: document.getElementById('exportCsvBtn'),
+        exportJsonBtn: document.getElementById('exportJsonBtn'),
+        resultTab: document.getElementById('resultTab'),
+        rawTab: document.getElementById('rawTab')
+      };
+
+      const state = {
+        text: demoText,
+        searchKeyword: '',
+        groupField: '',
+        subGroupField: 'none',
+        metricField: '',
+        aggregateType: 'count',
+        parsed: { headers: [], rows: [] },
+        columnTypes: {},
+        numericColumns: [],
+        filteredRows: [],
+        groupedResult: []
+      };
+
+      function parseDelimitedText(text) {
+        if (!text || !text.trim()) return { headers: [], rows: [] };
+        const lines = text.replace(/\r/g, '').split('\n').map(line => line.trim()).filter(Boolean);
+        if (!lines.length) return { headers: [], rows: [] };
+
+        const sample = lines[0];
+        const delimiter = sample.includes('\t') ? '\t' : sample.includes(';') ? ';' : ',';
+
+        function splitLine(line) {
+          const result = [];
+          let current = '';
+          let inQuotes = false;
+          for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if (char === '"') {
+              if (inQuotes && line[i + 1] === '"') {
+                current += '"';
+                i++;
+              } else {
+                inQuotes = !inQuotes;
+              }
+            } else if (char === delimiter && !inQuotes) {
+              result.push(current.trim());
+              current = '';
+            } else {
+              current += char;
+            }
+          }
+          result.push(current.trim());
+          return result;
+        }
+
+        const rawHeaders = splitLine(lines[0]);
+        const headers = rawHeaders.map((h, i) => h || `字段${i + 1}`);
+        const rows = lines.slice(1).map((line, rowIndex) => {
+          const values = splitLine(line);
+          const row = { __index: rowIndex + 1 };
+          headers.forEach((header, i) => { row[header] = values[i] ?? ''; });
+          return row;
+        });
+        return { headers, rows };
+      }
+
+      function inferColumnType(values) {
+        const clean = values.filter(v => v !== null && v !== undefined && String(v).trim() !== '');
+        if (!clean.length) return '文本';
+        const numericCount = clean.filter(v => !isNaN(Number(String(v).replace(/,/g, '')))).length;
+        const dateCount = clean.filter(v => !isNaN(Date.parse(v))).length;
+        if (numericCount / clean.length > 0.8) return '数值';
+        if (dateCount / clean.length > 0.8) return '日期';
+        return '文本';
+      }
+
+      function toNumber(value) {
+        const n = Number(String(value ?? '').replace(/,/g, ''));
+        return Number.isNaN(n) ? 0 : n;
+      }
+
+      function exportFile(filename, content, type) {
+        const blob = new Blob([content], { type });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function compute() {
+        state.parsed = parseDelimitedText(state.text);
+        state.columnTypes = {};
+        state.parsed.headers.forEach(header => {
+          state.columnTypes[header] = inferColumnType(state.parsed.rows.map(row => row[header]));
+        });
+        state.numericColumns = state.parsed.headers.filter(h => state.columnTypes[h] === '数值');
+
+        if (state.searchKeyword.trim()) {
+          const key = state.searchKeyword.toLowerCase();
+          state.filteredRows = state.parsed.rows.filter(row =>
+            state.parsed.headers.some(header => String(row[header] ?? '').toLowerCase().includes(key))
+          );
+        } else {
+          state.filteredRows = state.parsed.rows;
+        }
+
+        if (!state.groupField) {
+          state.groupedResult = [];
+          return;
+        }
+
+        const map = new Map();
+        state.filteredRows.forEach(row => {
+          const groupValue = String(row[state.groupField] || '未分类');
+          const subValue = state.subGroupField !== 'none' ? String(row[state.subGroupField] || '未分类') : '全部';
+          const key = `${groupValue}__${subValue}`;
+          if (!map.has(key)) {
+            map.set(key, { 分类: groupValue, 子分类: subValue, 条数: 0, 数值汇总: 0, 明细: [] });
+          }
+          const item = map.get(key);
+          item.条数 += 1;
+          item.数值汇总 += state.aggregateType === 'sum' && state.metricField ? toNumber(row[state.metricField]) : 0;
+          item.明细.push(row);
+        });
+
+        state.groupedResult = Array.from(map.values())
+          .map(item => ({ ...item, 输出值: state.aggregateType === 'count' ? item.条数 : item.数值汇总 }))
+          .sort((a, b) => b.输出值 - a.输出值);
+      }
+
+      function fillSelect(select, items, placeholder, includeNone) {
+        const current = select.value;
+        let html = '';
+        if (placeholder) html += `<option value="">${placeholder}</option>`;
+        if (includeNone) html += `<option value="none">不设置</option>`;
+        html += items.map(item => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join('');
+        select.innerHTML = html;
+        if ([...select.options].some(option => option.value === current)) {
+          select.value = current;
+        }
+      }
+
+      function render() {
+        fillSelect(els.groupField, state.parsed.headers, '选择一个分类字段', false);
+        fillSelect(els.subGroupField, state.parsed.headers, '', true);
+        fillSelect(els.metricField, state.numericColumns, '按条数统计时可不选', false);
+
+        els.groupField.value = state.groupField;
+        els.subGroupField.value = state.subGroupField;
+        els.metricField.value = state.metricField;
+        els.aggregateType.value = state.aggregateType;
+        els.searchKeyword.value = state.searchKeyword;
+        els.inputText.value = state.text;
+
+        els.columnBadges.innerHTML = state.parsed.headers.length
+          ? state.parsed.headers.map(header => `<span class="badge">${escapeHtml(header)} · ${escapeHtml(state.columnTypes[header])}</span>`).join('')
+          : '<span class="hint">暂无数据</span>';
+
+        els.totalRows.textContent = String(state.filteredRows.length);
+        els.totalCategories.textContent = String(state.groupField ? new Set(state.filteredRows.map(r => String(r[state.groupField] || '未分类'))).size : 0);
+        els.totalMetric.textContent = String(state.metricField ? state.filteredRows.reduce((sum, row) => sum + toNumber(row[state.metricField]), 0) : 0);
+
+        if (!state.groupedResult.length) {
+          els.resultBody.innerHTML = '<tr><td colspan="4" class="empty">请选择主分类字段后查看分析结果</td></tr>';
+        } else {
+          els.resultBody.innerHTML = state.groupedResult.map(item => `
+            <tr>
+              <td>${escapeHtml(item.分类)}</td>
+              <td>${escapeHtml(item.子分类)}</td>
+              <td><strong>${escapeHtml(item.输出值)}</strong></td>
+              <td>${state.aggregateType === 'count' ? `该分类共有 ${item.条数} 条记录` : `该分类的 ${escapeHtml(state.metricField)} 汇总为 ${item.输出值}`}</td>
+            </tr>
+          `).join('');
+        }
+
+        const previewHeaders = state.parsed.headers.slice(0, 8);
+        els.rawHead.innerHTML = previewHeaders.map(header => `<th>${escapeHtml(header)}</th>`).join('');
+        els.rawBody.innerHTML = state.filteredRows.slice(0, 20).map(row => `
+          <tr>${previewHeaders.map(header => `<td>${escapeHtml(row[header] ?? '')}</td>`).join('')}</tr>
+        `).join('') || `<tr><td colspan="${Math.max(previewHeaders.length, 1)}" class="empty">暂无预览数据</td></tr>`;
+      }
+
+      function syncStateFromInputs() {
+        state.text = els.inputText.value;
+        state.searchKeyword = els.searchKeyword.value;
+        state.groupField = els.groupField.value;
+        state.subGroupField = els.subGroupField.value || 'none';
+        state.metricField = els.metricField.value;
+        state.aggregateType = els.aggregateType.value;
+      }
+
+      function update() {
+        syncStateFromInputs();
+        compute();
+        render();
+      }
+
+      els.inputText.addEventListener('input', update);
+      els.searchKeyword.addEventListener('input', update);
+      els.groupField.addEventListener('change', update);
+      els.subGroupField.addEventListener('change', update);
+      els.metricField.addEventListener('change', update);
+      els.aggregateType.addEventListener('change', update);
+
+      els.fileInput.addEventListener('change', async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        state.text = await file.text();
+        update();
+      });
+
+      els.demoBtn.addEventListener('click', () => {
+        state.text = demoText;
+        state.searchKeyword = '';
+        update();
+      });
+
+      els.clearBtn.addEventListener('click', () => {
+        state.text = '';
+        state.searchKeyword = '';
+        state.groupField = '';
+        state.subGroupField = 'none';
+        state.metricField = '';
+        state.aggregateType = 'count';
+        compute();
+        render();
+      });
+
+      els.exportCsvBtn.addEventListener('click', () => {
+        if (!state.groupedResult.length) return;
+        const headers = ['分类', '子分类', state.aggregateType === 'count' ? '条数' : `汇总(${state.metricField})`];
+        const lines = [headers.join(',')].concat(
+          state.groupedResult.map(item =>
+            [item.分类, item.子分类, item.输出值].map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
+          )
+        );
+        exportFile('分类分析结果.csv', lines.join('\n'), 'text/csv;charset=utf-8;');
+      });
+
+      els.exportJsonBtn.addEventListener('click', () => {
+        exportFile('分类分析结果.json', JSON.stringify(state.groupedResult, null, 2), 'application/json;charset=utf-8;');
+      });
+
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.tab-btn').forEach(x => x.classList.remove('active'));
+          btn.classList.add('active');
+          const tab = btn.dataset.tab;
+          els.resultTab.classList.toggle('hidden', tab !== 'result');
+          els.rawTab.classList.toggle('hidden', tab !== 'raw');
+        });
+      });
+
+      state.text = demoText;
+      compute();
+      render();
+    </script>
+  </body>
+</html>
