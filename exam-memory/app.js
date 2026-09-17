@@ -6,7 +6,7 @@
     custom: 'EXAM_CUSTOM_QUESTIONS', records: 'EXAM_REVIEW_RECORDS',
     stats: 'EXAM_USER_STATS', settings: 'EXAM_SETTINGS',
     attempts: 'EXAM_ATTEMPTS', cursors: 'EXAM_CURSORS',
-    session: 'EXAM_SESSION', homeSelection: 'EXAM_HOME_SELECTION',
+    session: 'EXAM_SESSION',
     settingsVersion: 'EXAM_SETTINGS_VERSION', passProgress: 'EXAM_PASS_PROGRESS'
   };
   const DEFAULT_SETTINGS = { dailyNewLimit: 500, dailyReviewLimit: 200, shuffleOptions: false, wrongRedo: true };
@@ -17,7 +17,6 @@
   ];
   const app = document.getElementById('app');
   const savedSettings = read(KEYS.settings, null);
-  const savedHomeSelection = read(KEYS.homeSelection, []);
   const state = {
     questions: read(KEYS.custom, null) || BUILTIN,
     records: read(KEYS.records, {}),
@@ -27,7 +26,6 @@
     cursors: read(KEYS.cursors, {}),
     passProgress: read(KEYS.passProgress, null),
     view: 'home', session: read(KEYS.session, null), result: null, wrongFilter: '全部章节',
-    homeSelectedIds: new Set(Array.isArray(savedHomeSelection) ? savedHomeSelection : []), homeOpenChapters: new Set(),
     planGroups: [], flash: ''
   };
 
@@ -57,9 +55,7 @@
     return session.ids.every(id => ids.has(id));
   }
   if (!validSession(state.session, state.questions)) state.session = null;
-  state.homeSelectedIds = new Set([...state.homeSelectedIds].filter(id => state.questions.some(q => q.id === id)));
   function saveSession() { write(KEYS.session, state.session); }
-  function saveHomeSelection() { write(KEYS.homeSelection, [...state.homeSelectedIds]); }
   function esc(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
@@ -227,14 +223,12 @@
     state.passProgress = { completed: 0, seenIds: [] };
     state.session = null;
     state.result = null;
-    state.homeSelectedIds.clear();
     write(KEYS.records, state.records);
     write(KEYS.stats, state.stats);
     write(KEYS.attempts, state.attempts);
     write(KEYS.cursors, state.cursors);
     write(KEYS.passProgress, state.passProgress);
     saveSession();
-    saveHomeSelection();
   }
   function typeLabel(type) { return type === 'multiple' ? '多选' : type === 'judge' ? '判断' : '单选'; }
   function btn(action, label, kind, extra) {
@@ -257,7 +251,6 @@
     if (!preserveScroll) window.scrollTo(0, 0);
   }
   function renderHome() {
-    const plan = dailyPlan();
     const pass = passPlan();
     const stats = state.stats;
     const accuracy = stats.totalDone ? Math.round(stats.totalCorrect / stats.totalDone * 100) : 0;
@@ -270,9 +263,12 @@
     const chapters = Array.from(chapterMap, ([name, questions]) => {
       const studied = questions.filter(q => hasStudied(state.records[q.id])).length;
       const mastered = questions.filter(q => state.records[q.id] && state.records[q.id].mastery === 'mastered').length;
-      return { name, questions, studied, mastered };
+      return { name, count: questions.length, studied, mastered };
     });
-    return `<div class="page-head"><div><h1>今日学习</h1><p class="sub">按计划复习，答错的题会优先再练。</p></div></div>
+    return `<div class="page-head"><div><h1>考试题库</h1><p class="sub">选择分类开始刷题，答错的题会优先再练。</p></div></div>
+      <section class="card chapter-library"><div class="section-heading"><h2>分类题库</h2><p class="notice">共 ${chapters.length} 个分类、${state.questions.length} 道题。选择分类即可开始刷题。</p></div>
+        <div class="chapter-list">${chapters.map((chapter, index) => `<div class="chapter-card"><span class="chapter-index">${String(index + 1).padStart(2, '0')}</span><div class="chapter-summary"><strong>${esc(chapter.name)}</strong><small>${chapter.count} 道题 · 已做 ${chapter.studied} · 已掌握 ${chapter.mastered}</small><span class="chapter-progress"><span style="width:${chapter.count ? Math.round(chapter.studied / chapter.count * 100) : 0}%"></span></span></div>${btn('chapterAll','开始刷题','soft',`data-chapter="${esc(chapter.name)}" aria-label="开始刷题：${esc(chapter.name)}"`)}</div>`).join('')}</div>
+      </section>
       <section class="card practice-methods"><div class="section-heading"><h2>选择练习方式</h2><p class="notice">从全题库开始，或专练需要巩固的题目</p></div><div class="mode-grid">
         <button class="mode-tile" data-action="start" data-mode="all"><strong>全题库顺序刷题</strong><span>按题库顺序练习全部 ${state.questions.length} 道</span></button>
         <button class="mode-tile" data-action="start" data-mode="random"><strong>全题库随机刷题</strong><span>打乱全部 ${state.questions.length} 道题</span></button>
@@ -280,17 +276,8 @@
         <button class="mode-tile" data-action="start" data-mode="favorite"><strong>收藏练习</strong><span>回顾标记的重点题</span></button>
       </div></section>
       <div class="home-feature-grid">
-      <section class="card hero"><div><span class="eyebrow">今日计划</span><h2>${plan.questions.length} 道待完成</h2><p class="detail">到期复习 ${plan.dueTotal} 道 · 新题 ${plan.fresh.length} 道</p></div>${btn('start', '开始今日复习', 'white', 'data-mode="daily"')}</section>
       <section class="card resume-card"><div><span class="eyebrow">上次练习</span>${state.session ? `<h2>接着上次继续</h2><p class="detail">${esc(state.session.title)} · 第 ${state.session.cursor + 1} / ${state.session.ids.length} 题 · 已答 ${state.session.total} 题</p>` : `<h2>暂无未完成练习</h2><p class="detail">开始刷题后，可在这里继续上次的进度</p>`}</div>${state.session ? btn('resume','继续刷题','') : ''}</section>
       </div>
-      <section class="card chapter-library"><div class="section-heading"><h2>分类题库</h2><p class="notice">共 ${chapters.length} 个分类、${state.questions.length} 道题。展开分类可查看和选择每一道题。</p></div>
-        <label class="chapter-search-label" for="home-search">搜索题目</label><input class="field chapter-search" type="search" id="home-search" placeholder="搜索题干、标签或章节" autocomplete="off">
-        <div class="selection-bar"><span>已选 <strong id="home-selected-count">${state.homeSelectedIds.size}</strong> 道</span><div class="selection-actions">${btn('clearPicked','清空选择','neutral',state.homeSelectedIds.size ? '' : 'disabled')}${btn('startPicked','练习已选题目','',state.homeSelectedIds.size ? '' : 'disabled')}</div></div>
-        <div class="chapter-list">${chapters.map((chapter, index) => `<details class="chapter-card" data-chapter="${esc(chapter.name)}" ${state.homeOpenChapters.has(chapter.name) ? 'open' : ''}><summary><span class="chapter-index">${String(index + 1).padStart(2, '0')}</span><span class="chapter-summary"><strong>${esc(chapter.name)}</strong><small>${chapter.questions.length} 道题 · 已做 ${chapter.studied} · 已掌握 ${chapter.mastered}</small><span class="chapter-progress"><span style="width:${chapter.questions.length ? Math.round(chapter.studied / chapter.questions.length * 100) : 0}%"></span></span></span><span class="chapter-match"></span><span class="chapter-chevron" aria-hidden="true">⌄</span></summary>
-          <div class="chapter-body"><div class="chapter-actions">${btn('chapterAll', `练习本章全部 ${chapter.questions.length} 道`, 'soft', `data-chapter="${esc(chapter.name)}"`)}${btn('selectChapter','全选本章','outline')}</div>
-            <div class="chapter-question-list">${chapter.questions.map((q, i) => { const record = state.records[q.id]; const status = record && record.mastery === 'mastered' ? '已掌握' : record && record.isWrong ? '错题' : hasStudied(record) ? '已做' : '未做'; return `<div class="chapter-question-row"><input class="question-select" type="checkbox" data-id="${esc(q.id)}" aria-label="选择第 ${i + 1} 题" ${state.homeSelectedIds.has(q.id) ? 'checked' : ''}><button class="chapter-question-link" data-action="oneQuestion" data-id="${esc(q.id)}"><span class="chapter-question-number">${i + 1}.</span><span class="chapter-question-content"><strong>${esc(q.question)}</strong><small>${typeLabel(q.type)} · ${status}${q.tags.length ? ` · ${esc(q.tags.join(' / '))}` : ''}</small></span></button></div>`; }).join('')}</div>
-          </div></details>`).join('')}</div><p id="home-search-empty" class="empty" hidden>没有找到匹配的题目。</p>
-      </section>
       <section class="card pass-card"><div><h2>重复刷完整题库</h2><p class="notice">已刷完 <strong>${pass.completed}</strong> 遍 · 第 ${pass.completed + 1} 遍已做 ${pass.done} / ${state.questions.length} 道</p><div class="progress-track"><div class="progress-fill" style="width:${state.questions.length ? Math.round(pass.done / state.questions.length * 100) : 0}%"></div></div></div>${btn('start', `继续第 ${pass.completed + 1} 遍`, '', 'data-mode="pass"')}</section>
       <div class="metric-grid"><div class="card metric"><b>${state.questions.length}</b><span>题库总题</span></div><div class="card metric"><b>${stats.masteredCount}</b><span>已掌握</span></div><div class="card metric"><b>${accuracy}%</b><span>累计正确率</span></div><div class="card metric"><b>${streak} 天</b><span>连续学习</span></div></div>`;
   }
@@ -401,7 +388,7 @@
       format: 'exam-memory-backup', version: 1, exportedAt: new Date().toISOString(),
       customQuestions: read(KEYS.custom, null), records: state.records,
       stats: state.stats, settings: state.settings, attempts: state.attempts,
-      session: state.session, passProgress: state.passProgress, homeSelection: [...state.homeSelectedIds]
+      session: state.session, passProgress: state.passProgress
     };
   }
   function exportBackup() {
@@ -440,7 +427,6 @@
         !Number.isInteger(settings.dailyReviewLimit) || settings.dailyReviewLimit < 0 || settings.dailyReviewLimit > 500) throw new Error('备份中的学习设置不正确。');
     const session = validSession(data.session, questions) ? data.session : null;
     const passProgress = validPassProgress(data.passProgress, questions) ? data.passProgress : initialPassProgress(questions, records);
-    const selected = Array.isArray(data.homeSelection) ? data.homeSelection.filter(id => questionMap.has(id)) : [];
     if (!window.confirm('导入备份会替换本机当前题库和全部学习进度，确定继续？')) return false;
     state.questions = questions;
     state.records = records;
@@ -450,7 +436,6 @@
     state.session = session;
     state.passProgress = passProgress;
     state.result = null;
-    state.homeSelectedIds = new Set(selected);
     if (custom) write(KEYS.custom, custom); else localStorage.removeItem(KEYS.custom);
     write(KEYS.records, records);
     write(KEYS.stats, stats);
@@ -458,38 +443,7 @@
     write(KEYS.attempts, attempts);
     write(KEYS.passProgress, passProgress);
     saveSession();
-    saveHomeSelection();
     return true;
-  }
-  function updateHomeSelectionUI() {
-    const count = state.homeSelectedIds.size;
-    const label = document.getElementById('home-selected-count');
-    if (!label) return;
-    label.textContent = count;
-    const start = app.querySelector('[data-action="startPicked"]');
-    const clear = app.querySelector('[data-action="clearPicked"]');
-    start.disabled = !count;
-    clear.disabled = !count;
-    start.textContent = count ? `练习已选 ${count} 道` : '练习已选题目';
-    saveHomeSelection();
-  }
-  function filterHomeQuestions(term) {
-    const query = term.trim().toLowerCase();
-    let visibleChapters = 0;
-    app.querySelectorAll('.chapter-card').forEach(chapter => {
-      const chapterHit = chapter.dataset.chapter.toLowerCase().includes(query);
-      let matches = 0;
-      chapter.querySelectorAll('.chapter-question-row').forEach(row => {
-        const found = !query || chapterHit || row.textContent.toLowerCase().includes(query);
-        row.hidden = !found;
-        if (found) matches++;
-      });
-      chapter.hidden = !!query && matches === 0;
-      chapter.querySelector('.chapter-match').textContent = query ? `${matches} 条匹配` : '';
-      if (query && matches) chapter.open = true;
-      if (matches) visibleChapters++;
-    });
-    document.getElementById('home-search-empty').hidden = visibleChapters > 0;
   }
   document.addEventListener('click', event => {
     const target = event.target.closest('[data-action]');
@@ -499,29 +453,6 @@
     if (action === 'resume') { state.view = 'practice'; render(); return; }
     if (action === 'start') { startMode(target.dataset.mode || 'all'); return; }
     if (action === 'chapterAll') { startMode('chapter', target.dataset.chapter); return; }
-    if (action === 'oneQuestion') { startMode('picked', [target.dataset.id]); return; }
-    if (action === 'startPicked') {
-      const ids = state.questions.filter(q => state.homeSelectedIds.has(q.id)).map(q => q.id);
-      if (ids.length) startMode('picked', ids);
-      return;
-    }
-    if (action === 'clearPicked') {
-      state.homeSelectedIds.clear();
-      app.querySelectorAll('.question-select').forEach(input => { input.checked = false; });
-      updateHomeSelectionUI();
-      return;
-    }
-    if (action === 'selectChapter') {
-      const inputs = [...target.closest('.chapter-card').querySelectorAll('.question-select')];
-      const allSelected = inputs.every(input => state.homeSelectedIds.has(input.dataset.id));
-      inputs.forEach(input => {
-        input.checked = !allSelected;
-        if (allSelected) state.homeSelectedIds.delete(input.dataset.id);
-        else state.homeSelectedIds.add(input.dataset.id);
-      });
-      updateHomeSelectionUI();
-      return;
-    }
     if (action === 'exportBackup') { exportBackup(); return; }
     if (action === 'copyBackup') {
       const field = document.getElementById('backup-text');
@@ -647,23 +578,8 @@
     state.view = 'result';
     render();
   }
-  document.addEventListener('input', event => {
-    if (event.target.id === 'home-search') filterHomeQuestions(event.target.value);
-  });
-  document.addEventListener('toggle', event => {
-    if (!event.target.matches || !event.target.matches('.chapter-card')) return;
-    const chapter = event.target.dataset.chapter;
-    if (event.target.open) state.homeOpenChapters.add(chapter);
-    else state.homeOpenChapters.delete(chapter);
-  }, true);
   document.addEventListener('change', async event => {
     const id = event.target.id;
-    if (event.target.classList.contains('question-select')) {
-      if (event.target.checked) state.homeSelectedIds.add(event.target.dataset.id);
-      else state.homeSelectedIds.delete(event.target.dataset.id);
-      updateHomeSelectionUI();
-      return;
-    }
     if (id === 'backup-file') {
       const file = event.target.files && event.target.files[0];
       if (!file) return;
