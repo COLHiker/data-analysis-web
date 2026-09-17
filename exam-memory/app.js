@@ -6,7 +6,7 @@
     custom: 'EXAM_CUSTOM_QUESTIONS', records: 'EXAM_REVIEW_RECORDS',
     stats: 'EXAM_USER_STATS', settings: 'EXAM_SETTINGS',
     attempts: 'EXAM_ATTEMPTS', cursors: 'EXAM_CURSORS',
-    session: 'EXAM_SESSION',
+    session: 'EXAM_SESSION', savedSessions: 'EXAM_SAVED_SESSIONS',
     settingsVersion: 'EXAM_SETTINGS_VERSION', passProgress: 'EXAM_PASS_PROGRESS'
   };
   const DEFAULT_SETTINGS = { dailyNewLimit: 500, dailyReviewLimit: 200, shuffleOptions: false, wrongRedo: true };
@@ -25,7 +25,8 @@
     attempts: read(KEYS.attempts, []),
     cursors: read(KEYS.cursors, {}),
     passProgress: read(KEYS.passProgress, null),
-    view: 'home', session: read(KEYS.session, null), result: null, wrongFilter: '全部章节',
+    view: 'home', session: read(KEYS.session, null), savedSessions: read(KEYS.savedSessions, []),
+    result: null, wrongFilter: '全部章节',
     planGroups: [], flash: ''
   };
 
@@ -55,7 +56,23 @@
     return session.ids.every(id => ids.has(id));
   }
   if (!validSession(state.session, state.questions)) state.session = null;
+  state.savedSessions = Array.isArray(state.savedSessions)
+    ? state.savedSessions.filter(session => validSession(session, state.questions)) : [];
   function saveSession() { write(KEYS.session, state.session); }
+  function switchSession(next, saved) {
+    const previous = state.savedSessions;
+    if (!write(KEYS.savedSessions, saved)) return false;
+    if (!write(KEYS.session, next)) {
+      write(KEYS.savedSessions, previous);
+      return false;
+    }
+    state.savedSessions = saved;
+    state.session = next;
+    state.result = null;
+    state.view = 'practice';
+    render();
+    return true;
+  }
   function esc(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
@@ -180,7 +197,6 @@
     return copy;
   }
   function startMode(mode, arg) {
-    if (state.session && !window.confirm('当前有未完成的练习。开始新练习会覆盖上次断点，确定继续？')) return;
     let list = state.questions.slice();
     let title = '全题库顺序刷题';
     if (mode === 'random') { list = shuffle(list); title = '全题库随机刷题'; }
@@ -193,11 +209,9 @@
     else if (mode === 'selection') { list = (arg || []).map(id => state.questions.find(q => q.id === id)).filter(Boolean); title = '计划复习'; }
     else if (mode === 'picked') { list = (arg || []).map(id => state.questions.find(q => q.id === id)).filter(Boolean); title = '自选题目'; }
     if (!list.length) { state.flash = '当前没有可练习的题目。'; state.view = 'home'; render(); return; }
-    state.session = { mode, arg, title, ids: list.map(q => q.id), cursor: 0, states: {}, redo: {}, total: 0, correct: 0, wrongIds: [] };
-    saveSession();
-    state.result = null;
-    state.view = 'practice';
-    render();
+    const next = { mode, arg, title, ids: list.map(q => q.id), cursor: 0, states: {}, redo: {}, total: 0, correct: 0, wrongIds: [] };
+    const saved = state.session ? [state.session, ...state.savedSessions] : state.savedSessions;
+    if (!switchSession(next, saved)) render();
   }
   function currentQuestion() {
     if (!state.session) return null;
@@ -222,6 +236,7 @@
     state.cursors = {};
     state.passProgress = { completed: 0, seenIds: [] };
     state.session = null;
+    state.savedSessions = [];
     state.result = null;
     write(KEYS.records, state.records);
     write(KEYS.stats, state.stats);
@@ -229,6 +244,7 @@
     write(KEYS.cursors, state.cursors);
     write(KEYS.passProgress, state.passProgress);
     saveSession();
+    write(KEYS.savedSessions, state.savedSessions);
   }
   function typeLabel(type) { return type === 'multiple' ? '多选' : type === 'judge' ? '判断' : '单选'; }
   function btn(action, label, kind, extra) {
@@ -263,7 +279,9 @@
       const mastered = questions.filter(q => state.records[q.id] && state.records[q.id].mastery === 'mastered').length;
       return { name, count: questions.length, studied, mastered };
     });
-    const resume = state.session ? `<div class="home-feature-grid"><section class="card resume-card"><div><span class="eyebrow">上次练习</span><h2>接着上次继续</h2><p class="detail">${esc(state.session.title)} · 第 ${state.session.cursor + 1} / ${state.session.ids.length} 题 · 已答 ${state.session.total} 题</p></div>${btn('resume','继续刷题','')}</section></div>` : '';
+    const unfinished = (state.session ? [{ session: state.session, index: -1 }] : [])
+      .concat(state.savedSessions.map((session, index) => ({ session, index })));
+    const resume = unfinished.length ? `<section class="card resume-card"><div><span class="eyebrow">未完成练习</span><h2>保存的刷题断点</h2><p class="detail">开始其他练习时，这些断点会保留；已提交的答题记录会直接保存。</p></div><div class="session-list">${unfinished.map(({ session, index }) => `<div class="session-row"><div class="session-summary"><strong>${esc(session.title || '刷题练习')}</strong><small>第 ${session.cursor + 1} / ${session.ids.length} 题 · 已答 ${session.total} 题${index === -1 ? ' · 当前练习' : ''}</small></div>${btn(index === -1 ? 'resume' : 'resumeSaved','继续刷题',index === -1 ? '' : 'soft',index === -1 ? '' : `data-index="${index}"`)}${index === -1 ? '' : btn('removeSaved','删除断点','neutral',`data-index="${index}"`)}</div>`).join('')}</div></section>` : '';
     return `${resume}<div class="page-head"><div><h1>考试题库</h1><p class="sub">选择分类开始刷题，答错的题会优先再练。</p></div></div>
       <section class="card chapter-library"><div class="section-heading"><h2>分类题库</h2><p class="notice">共 ${chapters.length} 个分类、${state.questions.length} 道题。选择分类即可开始刷题。</p></div>
         <div class="chapter-list">${chapters.map((chapter, index) => `<div class="chapter-card"><span class="chapter-index">${String(index + 1).padStart(2, '0')}</span><div class="chapter-summary"><strong>${esc(chapter.name)}</strong><small>${chapter.count} 道题 · 已做 ${chapter.studied} · 已掌握 ${chapter.mastered}</small><span class="chapter-progress"><span style="width:${chapter.count ? Math.round(chapter.studied / chapter.count * 100) : 0}%"></span></span></div>${btn('chapterAll','开始刷题','soft',`data-chapter="${esc(chapter.name)}" aria-label="开始刷题：${esc(chapter.name)}"`)}</div>`).join('')}</div>
@@ -384,7 +402,7 @@
       format: 'exam-memory-backup', version: 1, exportedAt: new Date().toISOString(),
       customQuestions: read(KEYS.custom, null), records: state.records,
       stats: state.stats, settings: state.settings, attempts: state.attempts,
-      session: state.session, passProgress: state.passProgress
+      session: state.session, savedSessions: state.savedSessions, passProgress: state.passProgress
     };
   }
   function exportBackup() {
@@ -422,6 +440,8 @@
     if (!Number.isInteger(settings.dailyNewLimit) || settings.dailyNewLimit < 0 || settings.dailyNewLimit > 500 ||
         !Number.isInteger(settings.dailyReviewLimit) || settings.dailyReviewLimit < 0 || settings.dailyReviewLimit > 500) throw new Error('备份中的学习设置不正确。');
     const session = validSession(data.session, questions) ? data.session : null;
+    const savedSessions = Array.isArray(data.savedSessions)
+      ? data.savedSessions.filter(item => validSession(item, questions)) : [];
     const passProgress = validPassProgress(data.passProgress, questions) ? data.passProgress : initialPassProgress(questions, records);
     if (!window.confirm('导入备份会替换本机当前题库和全部学习进度，确定继续？')) return false;
     state.questions = questions;
@@ -430,6 +450,7 @@
     state.settings = settings;
     state.attempts = attempts;
     state.session = session;
+    state.savedSessions = savedSessions;
     state.passProgress = passProgress;
     state.result = null;
     if (custom) write(KEYS.custom, custom); else localStorage.removeItem(KEYS.custom);
@@ -439,6 +460,7 @@
     write(KEYS.attempts, attempts);
     write(KEYS.passProgress, passProgress);
     saveSession();
+    write(KEYS.savedSessions, savedSessions);
     return true;
   }
   document.addEventListener('click', event => {
@@ -447,6 +469,24 @@
     const action = target.dataset.action;
     if (action === 'nav') { state.view = target.dataset.view; render(); return; }
     if (action === 'resume') { state.view = 'practice'; render(); return; }
+    if (action === 'resumeSaved') {
+      const index = Number(target.dataset.index);
+      if (!Number.isInteger(index) || index < 0 || index >= state.savedSessions.length) return;
+      const saved = state.savedSessions.slice();
+      const next = saved.splice(index, 1)[0];
+      if (state.session) saved.unshift(state.session);
+      if (!switchSession(next, saved)) render();
+      return;
+    }
+    if (action === 'removeSaved') {
+      const index = Number(target.dataset.index);
+      if (!Number.isInteger(index) || index < 0 || index >= state.savedSessions.length ||
+          !window.confirm('删除这个未完成的练习断点？已提交的答题记录会保留。')) return;
+      const saved = state.savedSessions.filter((_, i) => i !== index);
+      if (write(KEYS.savedSessions, saved)) state.savedSessions = saved;
+      render();
+      return;
+    }
     if (action === 'start') { startMode(target.dataset.mode || 'all'); return; }
     if (action === 'chapterAll') { startMode('chapter', target.dataset.chapter); return; }
     if (action === 'exportBackup') { exportBackup(); return; }
