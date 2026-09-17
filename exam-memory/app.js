@@ -242,8 +242,6 @@
   }
   function render(preserveScroll) {
     renderNav();
-    document.getElementById('header-date').textContent = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
-    document.getElementById('top-count').textContent = `${state.questions.length} 道题`;
     const pages = { home: renderHome, practice: renderPractice, wrong: renderWrong, plan: renderPlan,
       stats: renderStats, manage: renderManage, result: renderResult };
     app.innerHTML = (state.flash ? `<div class="card error-text" role="alert">${esc(state.flash)}</div>` : '') + (pages[state.view] || renderHome)();
@@ -265,7 +263,8 @@
       const mastered = questions.filter(q => state.records[q.id] && state.records[q.id].mastery === 'mastered').length;
       return { name, count: questions.length, studied, mastered };
     });
-    return `<div class="page-head"><div><h1>考试题库</h1><p class="sub">选择分类开始刷题，答错的题会优先再练。</p></div></div>
+    const resume = state.session ? `<div class="home-feature-grid"><section class="card resume-card"><div><span class="eyebrow">上次练习</span><h2>接着上次继续</h2><p class="detail">${esc(state.session.title)} · 第 ${state.session.cursor + 1} / ${state.session.ids.length} 题 · 已答 ${state.session.total} 题</p></div>${btn('resume','继续刷题','')}</section></div>` : '';
+    return `${resume}<div class="page-head"><div><h1>考试题库</h1><p class="sub">选择分类开始刷题，答错的题会优先再练。</p></div></div>
       <section class="card chapter-library"><div class="section-heading"><h2>分类题库</h2><p class="notice">共 ${chapters.length} 个分类、${state.questions.length} 道题。选择分类即可开始刷题。</p></div>
         <div class="chapter-list">${chapters.map((chapter, index) => `<div class="chapter-card"><span class="chapter-index">${String(index + 1).padStart(2, '0')}</span><div class="chapter-summary"><strong>${esc(chapter.name)}</strong><small>${chapter.count} 道题 · 已做 ${chapter.studied} · 已掌握 ${chapter.mastered}</small><span class="chapter-progress"><span style="width:${chapter.count ? Math.round(chapter.studied / chapter.count * 100) : 0}%"></span></span></div>${btn('chapterAll','开始刷题','soft',`data-chapter="${esc(chapter.name)}" aria-label="开始刷题：${esc(chapter.name)}"`)}</div>`).join('')}</div>
       </section>
@@ -275,9 +274,6 @@
         <button class="mode-tile" data-action="start" data-mode="unmastered"><strong>未掌握题</strong><span>集中练习未熟练的题</span></button>
         <button class="mode-tile" data-action="start" data-mode="favorite"><strong>收藏练习</strong><span>回顾标记的重点题</span></button>
       </div></section>
-      <div class="home-feature-grid">
-      <section class="card resume-card"><div><span class="eyebrow">上次练习</span>${state.session ? `<h2>接着上次继续</h2><p class="detail">${esc(state.session.title)} · 第 ${state.session.cursor + 1} / ${state.session.ids.length} 题 · 已答 ${state.session.total} 题</p>` : `<h2>暂无未完成练习</h2><p class="detail">开始刷题后，可在这里继续上次的进度</p>`}</div>${state.session ? btn('resume','继续刷题','') : ''}</section>
-      </div>
       <section class="card pass-card"><div><h2>重复刷完整题库</h2><p class="notice">已刷完 <strong>${pass.completed}</strong> 遍 · 第 ${pass.completed + 1} 遍已做 ${pass.done} / ${state.questions.length} 道</p><div class="progress-track"><div class="progress-fill" style="width:${state.questions.length ? Math.round(pass.done / state.questions.length * 100) : 0}%"></div></div></div>${btn('start', `继续第 ${pass.completed + 1} 遍`, '', 'data-mode="pass"')}</section>
       <div class="metric-grid"><div class="card metric"><b>${state.questions.length}</b><span>题库总题</span></div><div class="card metric"><b>${stats.masteredCount}</b><span>已掌握</span></div><div class="card metric"><b>${accuracy}%</b><span>累计正确率</span></div><div class="card metric"><b>${streak} 天</b><span>连续学习</span></div></div>`;
   }
