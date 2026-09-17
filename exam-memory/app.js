@@ -6,23 +6,26 @@
     custom: 'EXAM_CUSTOM_QUESTIONS', records: 'EXAM_REVIEW_RECORDS',
     stats: 'EXAM_USER_STATS', settings: 'EXAM_SETTINGS',
     attempts: 'EXAM_ATTEMPTS', cursors: 'EXAM_CURSORS',
-    session: 'EXAM_SESSION', homeSelection: 'EXAM_HOME_SELECTION'
+    session: 'EXAM_SESSION', homeSelection: 'EXAM_HOME_SELECTION',
+    settingsVersion: 'EXAM_SETTINGS_VERSION', passProgress: 'EXAM_PASS_PROGRESS'
   };
-  const DEFAULT_SETTINGS = { dailyNewLimit: 20, dailyReviewLimit: 50, shuffleOptions: false, wrongRedo: true };
+  const DEFAULT_SETTINGS = { dailyNewLimit: 500, dailyReviewLimit: 200, shuffleOptions: false, wrongRedo: true };
   const DEFAULT_STATS = { totalDone: 0, totalCorrect: 0, streak: 0, lastStudyDate: '', masteredCount: 0 };
   const NAV = [
     ['home', '今日'], ['practice', '刷题'], ['wrong', '错题'],
     ['plan', '计划'], ['stats', '统计'], ['manage', '设置']
   ];
   const app = document.getElementById('app');
+  const savedSettings = read(KEYS.settings, null);
   const savedHomeSelection = read(KEYS.homeSelection, []);
   const state = {
     questions: read(KEYS.custom, null) || BUILTIN,
     records: read(KEYS.records, {}),
     stats: Object.assign({}, DEFAULT_STATS, read(KEYS.stats, {})),
-    settings: Object.assign({}, DEFAULT_SETTINGS, read(KEYS.settings, {})),
+    settings: Object.assign({}, DEFAULT_SETTINGS, savedSettings || {}),
     attempts: read(KEYS.attempts, []),
     cursors: read(KEYS.cursors, {}),
+    passProgress: read(KEYS.passProgress, null),
     view: 'home', session: read(KEYS.session, null), result: null, wrongFilter: '全部章节',
     homeSelectedIds: new Set(Array.isArray(savedHomeSelection) ? savedHomeSelection : []), homeOpenChapters: new Set(),
     planGroups: [], flash: ''
@@ -37,6 +40,14 @@
   function write(key, value) {
     try { localStorage.setItem(key, JSON.stringify(value)); return true; }
     catch (_) { state.flash = '浏览器存储空间不足，学习记录可能无法保存。'; return false; }
+  }
+  if (read(KEYS.settingsVersion, 0) < 2) {
+    if (savedSettings && savedSettings.dailyNewLimit === 20 && savedSettings.dailyReviewLimit === 50) {
+      state.settings.dailyNewLimit = 500;
+      state.settings.dailyReviewLimit = 200;
+      write(KEYS.settings, state.settings);
+    }
+    write(KEYS.settingsVersion, 2);
   }
   function validSession(session, questions) {
     if (!session || !Array.isArray(session.ids) || !session.ids.length || !Number.isInteger(session.cursor) ||
@@ -69,6 +80,27 @@
   }
   function hasStudied(record) {
     return !!(record && (record.firstStudyDate || record.correctCount || record.wrongCount));
+  }
+  function initialPassProgress(questions, records) {
+    const studied = questions.filter(q => hasStudied(records[q.id])).map(q => q.id);
+    return studied.length === questions.length && questions.length
+      ? { completed: 1, seenIds: [] }
+      : { completed: 0, seenIds: studied };
+  }
+  function validPassProgress(progress, questions) {
+    if (!progress || !Number.isInteger(progress.completed) || progress.completed < 0 ||
+        !Array.isArray(progress.seenIds) || progress.seenIds.length >= questions.length) return false;
+    const validIds = new Set(questions.map(q => q.id));
+    return new Set(progress.seenIds).size === progress.seenIds.length && progress.seenIds.every(id => validIds.has(id));
+  }
+  if (!validPassProgress(state.passProgress, state.questions)) {
+    state.passProgress = initialPassProgress(state.questions, state.records);
+    write(KEYS.passProgress, state.passProgress);
+  }
+  function passPlan() {
+    const seen = new Set(state.passProgress.seenIds);
+    return { completed: state.passProgress.completed, done: seen.size,
+      pending: state.questions.filter(q => !seen.has(q.id)) };
   }
   function isDue(record, day) {
     return record.dueDate <= day || (record.isWrong && record.lastCorrectDate !== day);
@@ -134,6 +166,14 @@
     write(KEYS.stats, state.stats);
     state.attempts.push({ questionId: q.id, chapter: q.chapter, correct, date: day });
     write(KEYS.attempts, state.attempts);
+    if (!state.passProgress.seenIds.includes(q.id)) {
+      state.passProgress.seenIds.push(q.id);
+      if (state.passProgress.seenIds.length === state.questions.length) {
+        state.passProgress.completed++;
+        state.passProgress.seenIds = [];
+      }
+      write(KEYS.passProgress, state.passProgress);
+    }
   }
   function shuffle(list) {
     const copy = list.slice();
@@ -152,6 +192,7 @@
     else if (mode === 'wrong') { list = list.filter(q => state.records[q.id] && state.records[q.id].isWrong); title = '错题重练'; }
     else if (mode === 'favorite') { list = list.filter(q => state.records[q.id] && state.records[q.id].isFavorite); title = '收藏练习'; }
     else if (mode === 'unmastered') { list = list.filter(q => !state.records[q.id] || state.records[q.id].mastery !== 'mastered'); title = '未掌握题'; }
+    else if (mode === 'pass') { const plan = passPlan(); list = plan.pending; title = `全题库第 ${plan.completed + 1} 遍`; }
     else if (mode === 'daily') { list = dailyPlan().questions; title = '今日复习'; }
     else if (mode === 'selection') { list = (arg || []).map(id => state.questions.find(q => q.id === id)).filter(Boolean); title = '计划复习'; }
     else if (mode === 'picked') { list = (arg || []).map(id => state.questions.find(q => q.id === id)).filter(Boolean); title = '自选题目'; }
@@ -183,6 +224,7 @@
     state.stats = Object.assign({}, DEFAULT_STATS);
     state.attempts = [];
     state.cursors = {};
+    state.passProgress = { completed: 0, seenIds: [] };
     state.session = null;
     state.result = null;
     state.homeSelectedIds.clear();
@@ -190,6 +232,7 @@
     write(KEYS.stats, state.stats);
     write(KEYS.attempts, state.attempts);
     write(KEYS.cursors, state.cursors);
+    write(KEYS.passProgress, state.passProgress);
     saveSession();
     saveHomeSelection();
   }
@@ -215,6 +258,7 @@
   }
   function renderHome() {
     const plan = dailyPlan();
+    const pass = passPlan();
     const stats = state.stats;
     const accuracy = stats.totalDone ? Math.round(stats.totalCorrect / stats.totalDone * 100) : 0;
     const streak = [today(), addDays(today(), -1)].includes(stats.lastStudyDate) ? stats.streak : 0;
@@ -229,9 +273,17 @@
       return { name, questions, studied, mastered };
     });
     return `<div class="page-head"><div><h1>今日学习</h1><p class="sub">按计划复习，答错的题会优先再练。</p></div></div>
+      <section class="card practice-methods"><div class="section-heading"><h2>选择练习方式</h2><p class="notice">从全题库开始，或专练需要巩固的题目</p></div><div class="mode-grid">
+        <button class="mode-tile" data-action="start" data-mode="all"><strong>全题库顺序刷题</strong><span>按题库顺序练习全部 ${state.questions.length} 道</span></button>
+        <button class="mode-tile" data-action="start" data-mode="random"><strong>全题库随机刷题</strong><span>打乱全部 ${state.questions.length} 道题</span></button>
+        <button class="mode-tile" data-action="start" data-mode="unmastered"><strong>未掌握题</strong><span>集中练习未熟练的题</span></button>
+        <button class="mode-tile" data-action="start" data-mode="favorite"><strong>收藏练习</strong><span>回顾标记的重点题</span></button>
+      </div></section>
+      <div class="home-feature-grid">
       <section class="card hero"><div><span class="eyebrow">今日计划</span><h2>${plan.questions.length} 道待完成</h2><p class="detail">到期复习 ${plan.dueTotal} 道 · 新题 ${plan.fresh.length} 道</p></div>${btn('start', '开始今日复习', 'white', 'data-mode="daily"')}</section>
-      ${state.session ? `<section class="card resume-card"><div><strong>上次练习还没结束</strong><p class="notice">${esc(state.session.title)} · 第 ${state.session.cursor + 1} / ${state.session.ids.length} 题 · 已答 ${state.session.total} 题</p></div>${btn('resume','继续上次刷题','')}</section>` : ''}
-      <section class="card chapter-library"><div class="chapter-library-head"><div><h2>按章节浏览题库</h2><p class="notice">共 ${chapters.length} 章、${state.questions.length} 道题。展开章节可查看每一道题，勾选后可自由组卷。</p></div></div>
+      <section class="card resume-card"><div><span class="eyebrow">上次练习</span>${state.session ? `<h2>接着上次继续</h2><p class="detail">${esc(state.session.title)} · 第 ${state.session.cursor + 1} / ${state.session.ids.length} 题 · 已答 ${state.session.total} 题</p>` : `<h2>暂无未完成练习</h2><p class="detail">开始刷题后，可在这里继续上次的进度</p>`}</div>${state.session ? btn('resume','继续刷题','') : ''}</section>
+      </div>
+      <section class="card chapter-library"><div class="section-heading"><h2>分类题库</h2><p class="notice">共 ${chapters.length} 个分类、${state.questions.length} 道题。展开分类可查看和选择每一道题。</p></div>
         <label class="chapter-search-label" for="home-search">搜索题目</label><input class="field chapter-search" type="search" id="home-search" placeholder="搜索题干、标签或章节" autocomplete="off">
         <div class="selection-bar"><span>已选 <strong id="home-selected-count">${state.homeSelectedIds.size}</strong> 道</span><div class="selection-actions">${btn('clearPicked','清空选择','neutral',state.homeSelectedIds.size ? '' : 'disabled')}${btn('startPicked','练习已选题目','',state.homeSelectedIds.size ? '' : 'disabled')}</div></div>
         <div class="chapter-list">${chapters.map((chapter, index) => `<details class="chapter-card" data-chapter="${esc(chapter.name)}" ${state.homeOpenChapters.has(chapter.name) ? 'open' : ''}><summary><span class="chapter-index">${String(index + 1).padStart(2, '0')}</span><span class="chapter-summary"><strong>${esc(chapter.name)}</strong><small>${chapter.questions.length} 道题 · 已做 ${chapter.studied} · 已掌握 ${chapter.mastered}</small><span class="chapter-progress"><span style="width:${chapter.questions.length ? Math.round(chapter.studied / chapter.questions.length * 100) : 0}%"></span></span></span><span class="chapter-match"></span><span class="chapter-chevron" aria-hidden="true">⌄</span></summary>
@@ -239,14 +291,8 @@
             <div class="chapter-question-list">${chapter.questions.map((q, i) => { const record = state.records[q.id]; const status = record && record.mastery === 'mastered' ? '已掌握' : record && record.isWrong ? '错题' : hasStudied(record) ? '已做' : '未做'; return `<div class="chapter-question-row"><input class="question-select" type="checkbox" data-id="${esc(q.id)}" aria-label="选择第 ${i + 1} 题" ${state.homeSelectedIds.has(q.id) ? 'checked' : ''}><button class="chapter-question-link" data-action="oneQuestion" data-id="${esc(q.id)}"><span class="chapter-question-number">${i + 1}.</span><span class="chapter-question-content"><strong>${esc(q.question)}</strong><small>${typeLabel(q.type)} · ${status}${q.tags.length ? ` · ${esc(q.tags.join(' / '))}` : ''}</small></span></button></div>`; }).join('')}</div>
           </div></details>`).join('')}</div><p id="home-search-empty" class="empty" hidden>没有找到匹配的题目。</p>
       </section>
-      <div class="metric-grid"><div class="card metric"><b>${state.questions.length}</b><span>题库总题</span></div><div class="card metric"><b>${stats.masteredCount}</b><span>已掌握</span></div><div class="card metric"><b>${accuracy}%</b><span>累计正确率</span></div><div class="card metric"><b>${streak} 天</b><span>连续学习</span></div></div>
-      <div class="split"><section class="card"><h2>选择练习方式</h2><div class="mode-grid">
-        <button class="mode-tile" data-action="start" data-mode="all"><strong>全题库顺序刷题</strong><span>按题库顺序练习全部 ${state.questions.length} 道</span></button>
-        <button class="mode-tile" data-action="start" data-mode="random"><strong>全题库随机刷题</strong><span>打乱全部 ${state.questions.length} 道题</span></button>
-        <button class="mode-tile" data-action="start" data-mode="unmastered"><strong>未掌握题</strong><span>集中练习未熟练的题</span></button>
-        <button class="mode-tile" data-action="start" data-mode="favorite"><strong>收藏练习</strong><span>回顾标记的重点题</span></button>
-      </div></section>
-      <section class="card"><h2>学习记录</h2><p class="notice">每次选择、提交和翻页都会保存在当前浏览器。下次用同一浏览器打开，可从断点继续。错题连续答对两次后移出错题本。</p><div style="margin-top:20px" class="btn-row">${btn('nav','查看错题','outline','data-view="wrong"')}${btn('nav','复习计划','soft','data-view="plan"')}</div></section></div>`;
+      <section class="card pass-card"><div><h2>重复刷完整题库</h2><p class="notice">已刷完 <strong>${pass.completed}</strong> 遍 · 第 ${pass.completed + 1} 遍已做 ${pass.done} / ${state.questions.length} 道</p><div class="progress-track"><div class="progress-fill" style="width:${state.questions.length ? Math.round(pass.done / state.questions.length * 100) : 0}%"></div></div></div>${btn('start', `继续第 ${pass.completed + 1} 遍`, '', 'data-mode="pass"')}</section>
+      <div class="metric-grid"><div class="card metric"><b>${state.questions.length}</b><span>题库总题</span></div><div class="card metric"><b>${stats.masteredCount}</b><span>已掌握</span></div><div class="card metric"><b>${accuracy}%</b><span>累计正确率</span></div><div class="card metric"><b>${streak} 天</b><span>连续学习</span></div></div>`;
   }
   function renderPractice() {
     if (!state.session) return `<div class="page-head"><div><h1>开始刷题</h1><p class="sub">选择一个练习方式。</p></div></div><div class="card"><div class="btn-row">${btn('start','顺序刷题','', 'data-mode="all"')}${btn('start','随机刷题','soft','data-mode="random"')}${btn('start','错题重练','soft','data-mode="wrong"')}${btn('start','今日复习','soft','data-mode="daily"')}</div></div>`;
@@ -275,7 +321,7 @@
     const wrong = result.wrongIds.map(id => state.questions.find(q => q.id === id)).filter(Boolean);
     return `<div class="page-head"><h1>本轮结果</h1></div><section class="card result-summary"><div class="result-score">${accuracy}%</div><p>共答 ${result.total} 题 · 答对 ${result.correct} 题</p></section>
       <section class="card"><h2>本轮答错 ${wrong.length} 题</h2>${wrong.length ? wrong.map(q => `<div class="list-item"><div class="list-meta">${esc(q.chapter)}</div><div class="list-title">${esc(q.question)}</div><div class="list-answer">正确答案：${esc(q.answer.join('、'))}</div></div>`).join('') : '<p class="notice">全部答对。</p>'}</section>
-      <div class="btn-row">${btn('again','再来一轮','')}${btn('nav','查看错题','soft','data-view="wrong"')}${btn('nav','返回首页','neutral','data-view="home"')}</div>`;
+      <div class="btn-row">${btn('again',result.mode === 'pass' || result.mode === 'daily' ? `继续第 ${passPlan().completed + 1} 遍` : result.mode === 'chapter' ? '再刷本章一遍' : '再刷一遍','')}${btn('nav','查看错题','soft','data-view="wrong"')}${btn('nav','返回首页','neutral','data-view="home"')}</div>`;
   }
   function renderWrong() {
     const all = state.questions.filter(q => state.records[q.id] && state.records[q.id].isWrong);
@@ -313,6 +359,7 @@
     return `<div class="page-head"><div><h1>学习统计</h1><p class="sub">每次提交计为一次做题。</p></div></div>
       <div class="metric-grid"><div class="card metric"><b>${todayDone}</b><span>今日做题</span></div><div class="card metric"><b>${stats.totalDone}</b><span>累计做题</span></div><div class="card metric"><b>${accuracy}%</b><span>正确率</span></div><div class="card metric"><b>${streak} 天</b><span>连续学习</span></div></div>
       <section class="card"><h2>已掌握 ${stats.masteredCount} 题</h2><p class="notice">连续答对 5 次或复习间隔达到 30 天的题目会标记为已掌握。</p></section>
+      <section class="card"><h2>全题库已刷完 ${passPlan().completed} 遍</h2><p class="notice">每道题至少作答一次算完成一遍。当前这遍已做 ${passPlan().done} / ${state.questions.length} 道，答错重做同一题只计一次。</p></section>
       <section class="card"><h2>各章节正确率</h2>${Object.values(map).map(ch => { const pct = ch.done ? Math.round(ch.correct / ch.done * 100) : 0; return `<div class="stat-row"><div class="row"><span>${esc(ch.name)}</span><span>${pct}% · ${ch.done} 题</span></div><div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div></div>`; }).join('')}</section>`;
   }
   function renderManage() {
@@ -322,6 +369,7 @@
         <label class="settings-row"><span>每日复习上限<small>错题仍会优先出现</small></span><input class="field" type="number" min="0" max="500" id="daily-review" value="${state.settings.dailyReviewLimit}"></label>
         <label class="settings-row"><span>乱序选项<small>答案字母仍对应原选项</small></span><input class="switch" type="checkbox" id="shuffle-options" ${state.settings.shuffleOptions ? 'checked' : ''}></label>
         <label class="settings-row"><span>答错本轮重做<small>错题在本轮末尾再出现一次</small></span><input class="switch" type="checkbox" id="wrong-redo" ${state.settings.wrongRedo ? 'checked' : ''}></label>
+        <div class="btn-row" style="margin-top:14px">${btn('saveSettings','保存学习设置','')}</div>
       </section>
       <section class="card"><h2>学习数据备份</h2><p class="notice">同一手机的同一浏览器会自动保存学习进度和未完成的练习。更换浏览器、清理浏览数据或换手机前，请先备份；在新设备上导入即可恢复。</p><div class="btn-row" style="margin-top:16px">${btn('exportBackup','导出备份文件','')}<label class="btn soft" for="backup-file">导入备份文件</label><input class="visually-hidden" type="file" id="backup-file" accept=".json,application/json"></div><details class="backup-details"><summary>手机无法下载文件？使用文本备份</summary><p class="notice">生成后复制下面的内容保存到备忘录；恢复时粘贴回来。</p><div class="btn-row" style="margin-top:12px">${btn('copyBackup','生成并复制备份文本','soft')}${btn('importBackupText','从文本恢复','outline')}</div><textarea class="textarea backup-textarea" id="backup-text" aria-label="学习备份内容" placeholder="在此生成或粘贴学习备份内容"></textarea><p class="notice" id="backup-status" role="status"></p></details></section>
       <section class="card"><h2>题库管理</h2><p class="notice">粘贴 Question 对象数组的 JSON。导入后将替换当前题库并清空学习进度。</p><textarea class="textarea" id="json-input" placeholder='[{"id":"q1","type":"single","chapter":"示例章节",...}]' aria-label="题库 JSON"></textarea><div class="btn-row">${btn('import','验证并导入','')}${btn('restore','恢复原始题库','soft')}</div></section>
@@ -353,7 +401,7 @@
       format: 'exam-memory-backup', version: 1, exportedAt: new Date().toISOString(),
       customQuestions: read(KEYS.custom, null), records: state.records,
       stats: state.stats, settings: state.settings, attempts: state.attempts,
-      session: state.session, homeSelection: [...state.homeSelectedIds]
+      session: state.session, passProgress: state.passProgress, homeSelection: [...state.homeSelectedIds]
     };
   }
   function exportBackup() {
@@ -391,6 +439,7 @@
     if (!Number.isInteger(settings.dailyNewLimit) || settings.dailyNewLimit < 0 || settings.dailyNewLimit > 500 ||
         !Number.isInteger(settings.dailyReviewLimit) || settings.dailyReviewLimit < 0 || settings.dailyReviewLimit > 500) throw new Error('备份中的学习设置不正确。');
     const session = validSession(data.session, questions) ? data.session : null;
+    const passProgress = validPassProgress(data.passProgress, questions) ? data.passProgress : initialPassProgress(questions, records);
     const selected = Array.isArray(data.homeSelection) ? data.homeSelection.filter(id => questionMap.has(id)) : [];
     if (!window.confirm('导入备份会替换本机当前题库和全部学习进度，确定继续？')) return false;
     state.questions = questions;
@@ -399,6 +448,7 @@
     state.settings = settings;
     state.attempts = attempts;
     state.session = session;
+    state.passProgress = passProgress;
     state.result = null;
     state.homeSelectedIds = new Set(selected);
     if (custom) write(KEYS.custom, custom); else localStorage.removeItem(KEYS.custom);
@@ -406,6 +456,7 @@
     write(KEYS.stats, stats);
     write(KEYS.settings, settings);
     write(KEYS.attempts, attempts);
+    write(KEYS.passProgress, passProgress);
     saveSession();
     saveHomeSelection();
     return true;
@@ -440,7 +491,6 @@
     });
     document.getElementById('home-search-empty').hidden = visibleChapters > 0;
   }
-
   document.addEventListener('click', event => {
     const target = event.target.closest('[data-action]');
     if (!target) return;
@@ -543,7 +593,21 @@
       return;
     }
     if (action === 'end') { if (state.session && window.confirm('结束本轮并查看已完成的结果？')) finishSession(); return; }
-    if (action === 'again') { const r = state.result; if (r) startMode(r.mode, r.arg); return; }
+    if (action === 'again') { const r = state.result; if (r) startMode(r.mode === 'daily' ? 'pass' : r.mode, r.arg); return; }
+    if (action === 'saveSettings') {
+      const dailyNewLimit = Number(document.getElementById('daily-new').value);
+      const dailyReviewLimit = Number(document.getElementById('daily-review').value);
+      if (![dailyNewLimit, dailyReviewLimit].every(n => Number.isInteger(n) && n >= 0 && n <= 500)) {
+        state.flash = '请输入 0 到 500 的整数。'; render(); return;
+      }
+      state.settings.dailyNewLimit = dailyNewLimit;
+      state.settings.dailyReviewLimit = dailyReviewLimit;
+      state.settings.shuffleOptions = document.getElementById('shuffle-options').checked;
+      state.settings.wrongRedo = document.getElementById('wrong-redo').checked;
+      write(KEYS.settings, state.settings);
+      state.flash = '学习设置已保存。';
+      render(); return;
+    }
     if (action === 'removeWrong') {
       const id = target.dataset.id;
       if (!window.confirm('把这道题移出错题本？答题记录会保留。')) return;
